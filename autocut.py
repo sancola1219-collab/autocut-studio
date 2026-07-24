@@ -38,7 +38,20 @@ except Exception:
 BASE = Path(__file__).resolve().parent
 MUSIC_DIR = BASE / "背景音樂"
 OUT_DIR = BASE / "輸出"
+MEDIA_DIR = BASE / "素材"
 MUSIC_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm",
+              ".ts", ".mts", ".wmv", ".flv"}
+
+
+def list_media(limit=9):
+    """素材資料夾裡最新的影片（含子資料夾），新→舊。"""
+    if not MEDIA_DIR.exists():
+        return []
+    vids = [p for p in MEDIA_DIR.rglob("*")
+            if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
+    vids.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return vids[:limit]
 
 VOICES = {
     # 台灣
@@ -646,14 +659,26 @@ def interactive_fill(args):
     print("  自動剪片小工房")
     print("=" * 46)
     vids = [v for v in (args.video or []) if Path(v).exists()]
+    lib = list_media()
+    if not vids and lib:
+        print("「素材」資料夾裡的影片（新→舊）：")
+        for i, p in enumerate(lib, 1):
+            print(f"  [{i}] {p.name}")
+
+    def pick(ans):
+        """輸入編號就換成素材清單裡對應的檔案路徑。"""
+        if ans.isdecimal() and lib and 1 <= int(ans) <= len(lib):
+            return str(lib[int(ans) - 1])
+        return ans
+
     while not vids:
-        p = ask("影片檔案路徑（可直接把檔案拖進這個視窗）：")
+        p = pick(ask("影片路徑或上面的編號（也可直接把檔案拖進這個視窗）："))
         if p and Path(p).exists():
             vids.append(p)
         else:
             print("  找不到這個檔案，再試一次～")
     while True:
-        more = ask("要串接下一支就繼續貼路徑，沒有就直接 Enter：")
+        more = pick(ask("要串接下一支就繼續貼路徑／編號，沒有就直接 Enter："))
         if not more:
             break
         if Path(more).exists():

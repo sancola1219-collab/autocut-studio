@@ -64,11 +64,13 @@ AI 配音使用微軟線上語音，需要網路；聽打字幕則完全離線�
 autocut.py            一條龍自動剪片
 拖影片到這裡.bat        Windows 拖拉入口
 口說剪片台.bat          Windows 啟動網頁面板
+整理素材.bat            把「素材」裡的影片按拍攝時間標註歸檔
 voicecut/
   server.py           面板後端（Python 內建伺服器，零額外安裝）
   panel.html          面板前端
   parser.py           口說命令解析
   engine.py           剪輯引擎（剪掉/變速/靜音/音量/字幕）
+素材/                 影片丟這裡（面板素材庫、問答編號都從這裡挑）
 背景音樂/              把 mp3/wav 放這裡
 輸出/                 成品出現在這裡
 ```

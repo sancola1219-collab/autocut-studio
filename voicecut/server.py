@@ -25,6 +25,7 @@ except Exception:
 HERE = Path(__file__).resolve().parent
 OUT_DIR = BASE / "輸出"
 MUSIC_DIR = BASE / "背景音樂"
+MEDIA_DIR = BASE / "素材"
 HOST, PORT = "127.0.0.1", 8765
 
 _state = {"video": None, "duration": 0.0, "w": 0, "h": 0}
@@ -95,6 +96,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/state":
             return self._json({**_state, "video": str(_state["video"]) if _state["video"] else None,
                                "music": [p.name for p in _list_music()]})
+        if u.path == "/library":
+            return self._json({"videos": _list_media(), "dir": str(MEDIA_DIR)})
         if u.path == "/video":
             return self._serve_video()
         if u.path == "/render_status":
@@ -274,9 +277,29 @@ def _list_music():
                   if p.suffix.lower() in autocut.MUSIC_EXTS)
 
 
+def _list_media(limit=50):
+    """素材資料夾的影片（含子資料夾），新→舊，給面板的素材庫用。"""
+    from datetime import datetime
+    if not MEDIA_DIR.exists():
+        return []
+    vids = [p for p in MEDIA_DIR.rglob("*")
+            if p.is_file() and p.suffix.lower() in autocut.VIDEO_EXTS]
+    vids.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    out = []
+    for p in vids[:limit]:
+        st = p.stat()
+        out.append({
+            "name": p.name, "path": str(p),
+            "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M"),
+            "size": f"{st.st_size / 1048576:.0f}MB",
+        })
+    return out
+
+
 def main():
     OUT_DIR.mkdir(exist_ok=True)
     MUSIC_DIR.mkdir(exist_ok=True)
+    MEDIA_DIR.mkdir(exist_ok=True)
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
     print("=" * 46)

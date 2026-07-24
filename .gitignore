@@ -6,6 +6,10 @@
 背景音樂/*
 !背景音樂/.gitkeep
 
+# 素材：資料夾保留、影片不上傳
+素材/*
+!素材/.gitkeep
+
 # Python
 __pycache__/
 *.py[cod]
