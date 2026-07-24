@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>口說剪片台</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#121722; --card:#161c28; --line:#232b3a;
+    --ink:#e8edf6; --sub:#8b97ad; --accent:#7c5cff; --accent2:#22d3ee;
+    --cut:#ff5d73; --speed:#ffb454; --mute:#9aa4b8; --vol:#4ade80;
+    --sub-c:#22d3ee; --mark:#c084fc; --unknown:#f5a524;
+    --grad:linear-gradient(135deg,#7c5cff,#22d3ee);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Microsoft JhengHei","Segoe UI",system-ui,sans-serif;
+    background:radial-gradient(1200px 600px at 80% -10%,#1a2030,transparent),var(--bg);
+    color:var(--ink);min-height:100vh}
+  header{display:flex;align-items:center;gap:14px;padding:16px 22px;border-bottom:1px solid var(--line)}
+  .logo{width:38px;height:38px;border-radius:11px;background:var(--grad);
+    display:grid;place-items:center;font-size:20px;box-shadow:0 6px 22px rgba(124,92,255,.4)}
+  h1{font-size:18px;margin:0;letter-spacing:.5px}
+  h1 small{display:block;font-size:11px;color:var(--sub);font-weight:400;letter-spacing:2px;margin-top:2px}
+  .wrap{display:grid;grid-template-columns:1fr 340px;gap:18px;padding:18px 22px;max-width:1200px;margin:0 auto}
+  @media(max-width:880px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  .open-row{display:flex;gap:8px;margin-bottom:14px}
+  input[type=text]{flex:1;background:var(--bg2);border:1px solid var(--line);border-radius:10px;
+    color:var(--ink);padding:10px 12px;font-size:14px;font-family:inherit}
+  input[type=text]:focus{outline:none;border-color:var(--accent)}
+  button{font-family:inherit;cursor:pointer;border:none;border-radius:10px;color:#fff;
+    padding:10px 16px;font-size:14px;background:var(--bg2);border:1px solid var(--line);color:var(--ink);
+    transition:.15s}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--grad);border:none;font-weight:600;box-shadow:0 6px 20px rgba(124,92,255,.35)}
+  button.primary:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+  video{width:100%;border-radius:12px;background:#000;display:block;aspect-ratio:16/9;object-fit:contain}
+  .empty{display:grid;place-items:center;aspect-ratio:16/9;border:2px dashed var(--line);border-radius:12px;color:var(--sub);text-align:center;padding:20px;font-size:14px}
+  /* 時間軸 */
+  .tl{position:relative;height:38px;margin:14px 0 4px;background:var(--bg2);border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+  .tl .play{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 8px #fff;z-index:3}
+  .tl .mk{position:absolute;top:0;bottom:0;opacity:.75;z-index:1}
+  .tl .mk.point{width:3px}
+  .times{display:flex;justify-content:space-between;color:var(--sub);font-size:11px;font-variant-numeric:tabular-nums}
+  /* 按住說話 */
+  .talk-zone{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:16px}
+  .ptt{width:96px;height:96px;border-radius:50%;background:var(--grad);border:none;display:grid;place-items:center;
+    font-size:30px;position:relative;user-select:none;transition:transform .1s;box-shadow:0 10px 30px rgba(124,92,255,.4)}
+  .ptt:active{transform:scale(.95)}
+  .ptt.rec{background:linear-gradient(135deg,#ff5d73,#ff2d55);animation:pulse 1s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,45,85,.6)}70%{box-shadow:0 0 0 22px rgba(255,45,85,0)}100%{box-shadow:0 0 0 0 rgba(255,45,85,0)}}
+  .ptt-hint{color:var(--sub);font-size:13px;text-align:center}
+  .heard{min-height:24px;text-align:center;font-size:15px;color:var(--accent2);font-weight:600}
+  .type-row{display:flex;gap:8px;width:100%;margin-top:6px}
+  /* 清單 */
+  .side h2{font-size:14px;margin:0 0 12px;color:var(--sub);letter-spacing:1px;display:flex;justify-content:space-between}
+  .oplist{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto}
+  .op{display:flex;align-items:center;gap:10px;background:var(--bg2);border:1px solid var(--line);
+    border-left:4px solid var(--mute);border-radius:10px;padding:9px 11px;font-size:13px;animation:slidein .2s}
+  @keyframes slidein{from{opacity:0;transform:translateX(10px)}to{opacity:1}}
+  .op .tag{font-size:11px;padding:2px 7px;border-radius:6px;background:#0006;white-space:nowrap}
+  .op .txt{flex:1;line-height:1.35}
+  .op .txt small{color:var(--sub);display:block;font-size:11px}
+  .op .del{background:none;border:none;color:var(--sub);padding:2px 6px;font-size:16px}
+  .op .del:hover{color:var(--cut)}
+  .op[data-t=cut]{border-left-color:var(--cut)} .op[data-t=speed]{border-left-color:var(--speed)}
+  .op[data-t=mute]{border-left-color:var(--mute)} .op[data-t=volume]{border-left-color:var(--vol)}
+  .op[data-t=subtitle]{border-left-color:var(--sub-c)} .op[data-t=mark_start]{border-left-color:var(--mark)}
+  .op[data-t=unknown]{border-left-color:var(--unknown);background:#2a2213}
+  .op .ask{background:none;border:1px solid var(--unknown);color:var(--unknown);font-size:11px;padding:3px 8px;border-radius:6px}
+  .side-foot{margin-top:14px;border-top:1px solid var(--line);padding-top:14px}
+  .opts{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;font-size:13px;color:var(--sub)}
+  .prog{height:8px;background:var(--bg2);border-radius:99px;overflow:hidden;margin-top:10px;display:none}
+  .prog.on{display:block}
+  .prog i{display:block;height:100%;width:30%;background:var(--grad);border-radius:99px;animation:march 1.2s infinite}
+  @keyframes march{0%{margin-left:-30%}100%{margin-left:100%}}
+  .status{font-size:12px;color:var(--sub);margin-top:8px;text-align:center;min-height:16px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#222b;backdrop-filter:blur(8px);
+    border:1px solid var(--line);color:var(--ink);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.3s;pointer-events:none;z-index:9}
+  .toast.on{opacity:1}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--sub);margin-top:10px}
+  .legend b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:3px;vertical-align:middle}
+  a.dl{display:inline-block;margin-top:10px;color:var(--accent2);font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🎬</div>
+  <h1>口說剪片台<small>VOICE&nbsp;·&nbsp;CUT&nbsp;·&nbsp;STUDIO</small></h1>
+</header>
+
+<div class="wrap">
+  <div class="main">
+    <div class="card">
+      <div class="open-row">
+        <input id="path" type="text" placeholder="把影片檔案路徑貼進來（或拖影片檔到這個框）…">
+        <button class="primary" onclick="openVideo()">開啟</button>
+      </div>
+      <div id="stage">
+        <div class="empty" id="empty">還沒開啟影片～<br>把檔案路徑貼上面按「開啟」，或直接把影片拖進來</div>
+        <video id="vid" controls style="display:none"></video>
+      </div>
+
+      <div class="tl" id="tl">
+        <div class="play" id="play" style="left:0"></div>
+      </div>
+      <div class="times"><span id="cur">00:00</span><span id="dur">00:00</span></div>
+
+      <div class="talk-zone">
+        <button class="ptt" id="ptt" title="按住說話（或按住空白鍵）">🎙️</button>
+        <div class="ptt-hint">按住這顆鈕（或按住 <b>空白鍵</b>）講出你的需求，放開就辨識<br>
+          例如：「這裡加字幕買一送一」「從這裡開始」→「剪到這裡」「這段加快兩倍」</div>
+        <div class="heard" id="heard"></div>
+        <div class="type-row">
+          <input id="typed" type="text" placeholder="也可以打字下命令，Enter 送出（用目前播放位置）">
+          <button onclick="sendTyped()">送出</button>
+        </div>
+      </div>
+    </div>
+    <div class="legend">
+      <span><b style="background:var(--cut)"></b>剪掉</span>
+      <span><b style="background:var(--speed)"></b>變速</span>
+      <span><b style="background:var(--mute)"></b>靜音</span>
+      <span><b style="background:var(--vol)"></b>音量</span>
+      <span><b style="background:var(--sub-c)"></b>字幕</span>
+      <span><b style="background:var(--mark)"></b>起點</span>
+      <span><b style="background:var(--unknown)"></b>待解讀</span>
+    </div>
+  </div>
+
+  <div class="card side">
+    <h2><span>操作清單</span><span id="count">0</span></h2>
+    <div class="oplist" id="oplist"></div>
+    <div class="side-foot">
+      <div class="opts">
+        <label><input type="checkbox" id="optSubs" checked> 燒錄字幕到畫面</label>
+      </div>
+      <button class="primary" id="renderBtn" style="width:100%" onclick="render()" disabled>🎞️ 開始算圖</button>
+      <div class="prog" id="prog"><i></i></div>
+      <div class="status" id="status"></div>
+      <div id="result"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const vid = $("#vid"), tl = $("#tl");
+let ops = [];            // 操作清單
+let pendingStart = null; // 「從這裡開始」暫存
+let duration = 0;
+let mediaRec = null, chunks = [], recording = false;
+
+function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("on"),2200);}
+function fmt(s){s=Math.max(0,s|0);return String(s/60|0).padStart(2,"0")+":"+String(s%60).padStart(2,"0");}
+
+// ---- 開啟影片 ----
+async function openVideo(){
+  const path = $("#path").value.trim();
+  if(!path){toast("先貼上影片路徑");return;}
+  const r = await fetch("/open",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path})});
+  const d = await r.json();
+  if(d.error){toast(d.error);return;}
+  // 換片先清掉舊影片的操作，不然舊清單會套到新影片上
+  ops = []; pendingStart = null;
+  duration = d.duration;
+  renderList(); drawMarkers();
+  $("#result").innerHTML=""; $("#heard").textContent=""; $("#status").textContent="";
+  $("#empty").style.display="none";
+  vid.style.display="block";
+  vid.src = "/video?t="+Date.now();
+  vid.load();
+  $("#dur").textContent = fmt(duration);
+  $("#renderBtn").disabled = false;
+  toast("開好了：" + d.name);
+}
+// 拖檔進來自動填路徑
+["dragover","drop"].forEach(ev=>document.addEventListener(ev,e=>e.preventDefault()));
+document.addEventListener("drop",e=>{
+  const f=e.dataTransfer.files[0];
+  if(f && f.path){$("#path").value=f.path; openVideo();}
+  else if(f){toast("瀏覽器拿不到完整路徑，請手動貼上路徑");}
+});
+
+vid.addEventListener("timeupdate",()=>{
+  $("#cur").textContent=fmt(vid.currentTime);
+  if(duration) $("#play").style.left=(vid.currentTime/duration*100)+"%";
+});
+tl.addEventListener("click",e=>{
+  if(!duration)return;
+  const r=tl.getBoundingClientRect();
+  vid.currentTime=(e.clientX-r.left)/r.width*duration;
+});
+
+// ---- 錄音（按住說話）----
+async function initMic(){
+  if(mediaRec) return true;
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    mediaRec = new MediaRecorder(stream);
+    mediaRec.ondataavailable = e => chunks.push(e.data);
+    mediaRec.onstop = sendClip;
+    return true;
+  }catch(err){toast("拿不到麥克風權限："+err.message);return false;}
+}
+let micPending=false;
+async function startRec(){
+  if(recording || micPending) return;
+  if(!duration){toast("先開啟影片");return;}
+  micPending=true;                  // await 前先佔位，代表這次手勢還在準備麥克風
+  const ok=await initMic();
+  if(!micPending) return;           // 準備期間就放開了 → 取消，不要開始錄
+  micPending=false;
+  if(!ok) return;
+  chunks=[]; recording=true;
+  $("#ptt").classList.add("rec"); $("#heard").textContent="聆聽中…";
+  mediaRec.start();
+}
+function stopRec(){
+  if(micPending){micPending=false;return;}   // 還在等麥克風就放開 → 取消
+  if(!recording) return;
+  recording=false; $("#ptt").classList.remove("rec");
+  $("#heard").textContent="辨識中…";
+  mediaRec.stop();
+}
+async function sendClip(){
+  const blob = new Blob(chunks,{type:"audio/webm"});
+  const at = vid.currentTime;
+  const url = "/transcribe?at="+at+(pendingStart!=null?"&pending_start="+pendingStart:"");
+  try{
+    const r = await fetch(url,{method:"POST",headers:{"Content-Type":"audio/webm"},body:blob});
+    const d = await r.json();
+    if(d.error){$("#heard").textContent="";toast(d.error);return;}
+    $("#heard").textContent = d.text ? ("聽到：「"+d.text+"」") : "沒聽清楚";
+    if(d.op) addOp(d.op,d.desc);
+  }catch(e){$("#heard").textContent="";toast("辨識連線失敗");}
+}
+// 按鈕與空白鍵
+const ptt=$("#ptt");
+ptt.addEventListener("mousedown",startRec);
+ptt.addEventListener("touchstart",e=>{e.preventDefault();startRec();});
+document.addEventListener("mouseup",stopRec);
+document.addEventListener("touchend",stopRec);
+document.addEventListener("keydown",e=>{
+  const t=e.target;
+  // 焦點在輸入框／按鈕／勾選框時，保留空白鍵原本的功能
+  if(e.code==="Space" && !/^(INPUT|TEXTAREA|BUTTON|SELECT)$/.test(t.tagName)
+     && !t.isContentEditable){e.preventDefault();startRec();}
+});
+document.addEventListener("keyup",e=>{if(e.code==="Space")stopRec();});
+
+// ---- 打字下命令 ----
+async function sendTyped(){
+  const text=$("#typed").value.trim();
+  if(!text){return;}
+  if(!duration){toast("先開啟影片");return;}
+  const r=await fetch("/parse",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({text,at:vid.currentTime,pending_start:pendingStart})});
+  const d=await r.json();
+  $("#typed").value="";
+  $("#heard").textContent="輸入：「"+text+"」";
+  if(d.op) addOp(d.op,d.desc);
+}
+$("#typed").addEventListener("keydown",e=>{if(e.key==="Enter")sendTyped();});
+
+// ---- 操作清單 ----
+function addOp(op,desc){
+  if(op.type==="mark_start"){ pendingStart=op.start; toast("已標記起點，再講『剪到這裡』"); }
+  else if(["cut","speed","mute","volume"].includes(op.type)){ pendingStart=null; }
+  op._desc=desc; ops.push(op); renderList(); drawMarkers();
+}
+function delOp(i){
+  ops.splice(i,1);
+  // 依 addOp 的規則重算尚未被用掉的起點，免得留下已刪除的幽靈起點
+  pendingStart=null;
+  for(const o of ops){
+    if(o.type==="mark_start") pendingStart=o.start;
+    else if(["cut","speed","mute","volume"].includes(o.type)) pendingStart=null;
+  }
+  renderList(); drawMarkers();
+}
+function askClaude(i){
+  const o=ops[i];
+  const line=`（口說剪片）影片在 ${fmt(o.at)} 時我說：「${o.raw}」，請幫我轉成具體剪輯操作。`;
+  navigator.clipboard.writeText(line).then(()=>toast("已複製，貼到 Claude 對話框即可"));
+}
+function renderList(){
+  const box=$("#oplist"); box.innerHTML="";
+  $("#count").textContent=ops.length;
+  ops.forEach((o,i)=>{
+    const el=document.createElement("div");
+    el.className="op"; el.dataset.t=o.type;
+    const label={cut:"剪掉",speed:"變速",mute:"靜音",volume:"音量",subtitle:"字幕",mark_start:"起點",unknown:"待解讀"}[o.type]||o.type;
+    el.innerHTML=`<span class="tag">${label}</span>
+      <div class="txt">${o._desc}<small>${o.raw||""}</small></div>
+      ${o.type==="unknown"?`<button class="ask" onclick="askClaude(${i})">複製給 Claude</button>`:""}
+      <button class="del" onclick="delOp(${i})" title="刪除">×</button>`;
+    box.appendChild(el);
+  });
+}
+function drawMarkers(){
+  tl.querySelectorAll(".mk").forEach(e=>e.remove());
+  if(!duration)return;
+  const color={cut:"var(--cut)",speed:"var(--speed)",mute:"var(--mute)",volume:"var(--vol)",subtitle:"var(--sub-c)",mark_start:"var(--mark)"};
+  ops.forEach(o=>{
+    if(o.start==null)return;
+    const m=document.createElement("div"); m.className="mk";
+    m.style.background=color[o.type]||"var(--unknown)";
+    m.style.left=(o.start/duration*100)+"%";
+    if(o.end!=null && o.type!=="subtitle" && o.type!=="mark_start"){
+      m.style.width=Math.max(1,(o.end-o.start)/duration*100)+"%";
+    }else{ m.classList.add("point"); }
+    tl.appendChild(m);
+  });
+}
+
+// ---- 算圖 ----
+async function render(){
+  if(!ops.filter(o=>o.type!=="unknown"&&o.type!=="mark_start").length){toast("清單裡沒有可套用的操作");return;}
+  const btn=$("#renderBtn");
+  if(btn.disabled) return;          // 已經在算了，忽略連點
+  btn.disabled=true;                // 先擋住再送，避免同時開兩條算圖
+  try{
+    const r=await fetch("/render",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ops, options:{subs:$("#optSubs").checked}})});
+    const d=await r.json();
+    if(d.error){toast(d.error); btn.disabled=false; return;}
+    $("#prog").classList.add("on"); $("#result").innerHTML="";
+    poll();
+  }catch(e){ toast("算圖連線失敗"); btn.disabled=false; }
+}
+async function poll(){
+  const r=await fetch("/render_status"); const d=await r.json();
+  $("#status").textContent=d.progress||"";
+  if(d.running){setTimeout(poll,700);return;}
+  $("#prog").classList.remove("on"); $("#renderBtn").disabled=false;
+  if(d.error){toast("算圖失敗："+d.error);$("#status").textContent="失敗："+d.error;return;}
+  if(d.output){
+    $("#status").textContent="完成！";
+    $("#result").innerHTML=`<video src="/output?t=${Date.now()}" controls style="width:100%;border-radius:10px;margin-top:10px"></video>
+      <a class="dl" href="/output?t=${Date.now()}" download>⬇ 下載成品</a>`;
+    toast("剪好了～");
+  }
+}
+
+// 初始：把已開啟的影片接回來
+fetch("/state").then(r=>r.json()).then(d=>{
+  if(d.video){$("#path").value=d.video; openVideo();}
+});
+</script>
+</body>
+</html>

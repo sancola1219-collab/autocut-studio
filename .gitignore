@@ -1,0 +1,27 @@
+# 輸出成品（不進版控）
+輸出/
+輸出/*
+
+# 背景音樂：資料夾保留、內容不上傳（避免版權問題）
+背景音樂/*
+!背景音樂/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 暫存 / 測試
+*.tmp
+*_臨時*
+voicecut/_*.py
+
+# 編輯器 / 系統
+.claude/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
