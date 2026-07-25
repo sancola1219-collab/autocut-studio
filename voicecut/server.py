@@ -257,10 +257,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import tempfile
                 with tempfile.TemporaryDirectory(prefix="voicecut_") as td:
-                    E.apply_ops(video, ops, out_path, Path(td),
-                                burn_subs=burn,
-                                progress=lambda m: _job.update(progress=m))
-                _job.update(output=str(out_path), progress="完成")
+                    # 舊檔被鎖住時實際存成的檔名可能不同，用回傳值才對
+                    real = E.apply_ops(video, ops, out_path, Path(td),
+                                       burn_subs=burn,
+                                       progress=lambda m: _job.update(progress=m))
+                _job.update(output=str(real), progress="完成")
             except Exception as e:
                 _job.update(error=str(e), progress="失敗")
             finally:

@@ -166,6 +166,9 @@ def apply_ops(video: Path, ops, out_path: Path, tmp: Path,
         _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst,
               "-c", "copy", str(base)], cwd=tmp)
 
+    # 舊成品可能被縮圖程式／播放器抓著，重試後仍鎖住就自動換檔名
+    out_path = autocut.remove_stale(out_path)
+
     # 燒字幕
     if burn_subs and subs:
         say("燒錄字幕…")

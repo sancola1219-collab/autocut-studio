@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 try:
@@ -117,6 +118,31 @@ def print_voices():
 def die(msg: str):
     print(f"\n【錯誤】{msg}")
     sys.exit(1)
+
+
+def remove_stale(path: Path, tries=6, wait=0.7) -> Path:
+    """刪掉舊的輸出檔，回傳實際可用的路徑。
+
+    Windows 的縮圖產生器（dllhost）、防毒、剛關掉的播放器常會短暫抓著檔案，
+    幾秒後自己會放，所以先重試幾次；真的一直鎖著就自動換一個檔名，
+    免得辛苦跑完的成品沒地方放。
+    """
+    if not path.exists():
+        return path
+    for i in range(tries):
+        try:
+            path.unlink()
+            return path
+        except OSError:
+            if i == 0:
+                print("  舊檔被其他程式佔用（縮圖／播放器？），等一下再試…")
+            time.sleep(wait)
+    for n in range(2, 100):
+        alt = path.with_name(f"{path.stem}_{n}{path.suffix}")
+        if not alt.exists():
+            print(f"  舊檔一直被鎖住，這次改存成：{alt.name}")
+            return alt
+    die(f"輸出檔被鎖住又找不到可用的替代檔名，請先關掉播放器再重跑：\n{path}")
 
 
 def run(cmd, cwd=None, quiet=True):
@@ -627,14 +653,13 @@ def render(video: Path, out_path: Path, segments, vertical: bool, tmp: Path, *,
              "-movflags", "+faststart", str(out_path)]
 
     print(f"\n【合成】{'直式 9:16' if vertical else '橫式'} → {out_path.name}")
-    if out_path.exists():
-        try:
-            out_path.unlink()   # 先清掉舊檔，避免合成失敗還誤判成功
-        except OSError:
-            die(f"輸出檔正被其他程式開著（播放器？），請先關閉再重跑：\n{out_path}")
+    # 先清掉舊檔，避免合成失敗還誤判成功；被鎖住會自動換檔名
+    out_path = remove_stale(out_path)
+    args[-1] = str(out_path)
     r = subprocess.run([str(a) for a in args], cwd=tmp, check=False)
     if r.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
         die("ffmpeg 合成失敗，上面應該有錯誤訊息。")
+    return out_path
 
 
 # ---------------------------------------------------------------- 互動模式
@@ -896,11 +921,11 @@ def main():
         for vertical in layouts:
             suffix = "直式" if vertical else "橫式"
             out_path = OUT_DIR / f"{stem}_成品_{suffix}.mp4"
-            render(video, out_path, segments, vertical, tmp,
-                   narration=narration, total=total,
-                   music=music, music_vol=args.music_vol,
-                   keep_ambient=args.keep_ambient)
-            outputs.append(out_path)
+            outputs.append(render(          # 被鎖住時實際檔名可能不同
+                video, out_path, segments, vertical, tmp,
+                narration=narration, total=total,
+                music=music, music_vol=args.music_vol,
+                keep_ambient=args.keep_ambient))
 
     print("\n" + "=" * 46)
     print("完工！檔案在這裡：")
