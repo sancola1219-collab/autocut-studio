@@ -89,6 +89,40 @@
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#222b;backdrop-filter:blur(8px);
     border:1px solid var(--line);color:var(--ink);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.3s;pointer-events:none;z-index:9}
   .toast.on{opacity:1}
+  /* 錄旁白 */
+  .narr{margin-top:18px}
+  .narr>summary{cursor:pointer;font-size:14px;padding:12px 16px;background:var(--card);
+    border:1px solid var(--line);border-radius:14px;list-style:none;display:flex;
+    align-items:center;gap:10px;transition:.15s}
+  .narr>summary::-webkit-details-marker{display:none}
+  .narr>summary:hover{border-color:var(--accent)}
+  .narr>summary b{font-size:18px}
+  .narr>summary small{color:var(--sub);font-weight:400;margin-left:auto;font-size:12px}
+  .narr[open]>summary{border-radius:14px 14px 0 0;border-bottom:none}
+  .narr-body{background:var(--card);border:1px solid var(--line);border-top:none;
+    border-radius:0 0 14px 14px;padding:16px}
+  .tele{width:100%;min-height:190px;max-height:44vh;background:var(--bg2);
+    border:1px solid var(--line);border-radius:10px;color:var(--ink);
+    padding:16px 18px;font-size:17px;line-height:2.0;font-family:inherit;
+    resize:vertical;white-space:pre-wrap}
+  .tele:focus{outline:none;border-color:var(--accent)}
+  .tele.big{font-size:22px;line-height:2.1}
+  .rec-row{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
+  .rec-btn{background:linear-gradient(135deg,#ff5d73,#ff2d55);border:none;color:#fff;
+    padding:12px 22px;border-radius:11px;font-size:15px;font-weight:600;
+    box-shadow:0 6px 20px rgba(255,45,85,.3)}
+  .rec-btn.stop{background:linear-gradient(135deg,#64748b,#475569);box-shadow:none}
+  .rec-time{font-variant-numeric:tabular-nums;font-size:20px;color:var(--cut);
+    font-weight:700;min-width:62px;display:none}
+  .rec-time.on{display:inline-block}
+  .rec-hint{font-size:12px;color:var(--sub);flex:1;min-width:180px}
+  .narr-list{display:flex;flex-direction:column;gap:4px;margin-top:12px}
+  .narr-item{display:flex;gap:10px;align-items:center;background:var(--bg2);
+    border:1px solid var(--line);border-radius:9px;padding:7px 11px;font-size:12.5px}
+  .narr-item .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .narr-item .dur{color:var(--accent2);font-variant-numeric:tabular-nums}
+  .narr-item .w{color:var(--sub);font-size:11px}
+  .narr-item audio{height:28px;max-width:190px}
   .legend{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--sub);margin-top:10px}
   .legend b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:3px;vertical-align:middle}
   a.dl{display:inline-block;margin-top:10px;color:var(--accent2);font-size:13px}
@@ -133,6 +167,28 @@
         </div>
       </div>
     </div>
+    <details class="narr" id="narrBox">
+      <summary><b>🎤</b> 錄旁白（用自己的聲音配音）
+        <small id="narrSum">點開展開提字機</small></summary>
+      <div class="narr-body">
+        <textarea class="tele" id="tele" spellcheck="false"
+          placeholder="把念稿貼進來，或按下面「載入念稿」自動抓「素材」裡最新的 .txt…"></textarea>
+        <div class="rec-row">
+          <button onclick="loadScript()">📄 載入念稿</button>
+          <button onclick="document.getElementById('tele').classList.toggle('big')">🔍 放大字</button>
+          <label style="font-size:12.5px;color:var(--sub)">存成
+            <input id="narrName" type="text" value="我的旁白" style="width:120px;padding:6px 8px;font-size:12.5px">
+          </label>
+        </div>
+        <div class="rec-row">
+          <button class="rec-btn" id="recBtn" onclick="toggleNarr()">● 開始錄音</button>
+          <span class="rec-time" id="recTime">0:00</span>
+          <span class="rec-hint" id="recHint">按下去就開始念，念完再按一次停止。念錯不用重來，停一下重念那句就好。</span>
+        </div>
+        <div class="narr-list" id="narrList"></div>
+      </div>
+    </details>
+
     <div class="legend">
       <span><b style="background:var(--cut)"></b>剪掉</span>
       <span><b style="background:var(--speed)"></b>變速</span>
@@ -362,6 +418,105 @@ async function poll(){
   }
 }
 
+// ---- 錄旁白（提字機）----
+let narrRec=null, narrChunks=[], narrOn=false, narrT0=0, narrTimer=null;
+
+async function loadScript(){
+  try{
+    const d=await (await fetch("/script")).json();
+    if(!d.text){toast("「素材」裡找不到 .txt 念稿");return;}
+    $("#tele").value=d.text;
+    toast("已載入："+d.name);
+  }catch(e){toast("載入失敗");}
+}
+
+let narrPending=false;
+async function toggleNarr(){
+  if(narrOn){ stopNarr(); return; }
+  if(narrPending) return;              // 權限視窗還開著，連點不要開第二個錄音器
+  narrPending=true;
+  $("#recBtn").disabled=true;
+  $("#recHint").textContent="正在取得麥克風權限…";
+  let stream;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:false, noiseSuppression:true, autoGainControl:false}});
+  }catch(err){
+    narrPending=false; $("#recBtn").disabled=false;
+    $("#recHint").textContent="拿不到麥克風權限。";
+    toast("拿不到麥克風："+err.message); return;
+  }
+  narrPending=false; $("#recBtn").disabled=false;
+  narrChunks=[];
+  try{
+    narrRec=new MediaRecorder(stream);
+  }catch(err){
+    stream.getTracks().forEach(t=>t.stop());
+    $("#recHint").textContent="這個瀏覽器不支援錄音。";
+    toast("建立錄音器失敗："+err.message); return;
+  }
+  narrRec.ondataavailable=e=>{ if(e.data.size) narrChunks.push(e.data); };
+  narrRec.onstop=async ()=>{
+    stream.getTracks().forEach(t=>t.stop());
+    // 用錄音器實際產生的格式（Chrome 是 webm，Safari 是 mp4）
+    const mt=(narrRec.mimeType||"audio/webm").split(";")[0];
+    const blob=new Blob(narrChunks,{type:mt});
+    if(!blob.size){ $("#recHint").textContent="沒錄到聲音（檢查麥克風）"; return; }
+    $("#recHint").textContent="存檔中…";
+    const nm=encodeURIComponent($("#narrName").value.trim()||"我的旁白");
+    // 存檔失敗時給下載連結，念很久的錄音絕對不能就這樣消失
+    const rescue=()=>{
+      const url=URL.createObjectURL(blob);
+      $("#recHint").innerHTML=`存檔失敗，<a href="${url}" download="旁白備份.${
+        mt.includes("mp4")?"m4a":"webm"}" style="color:var(--accent2)">點這裡下載備份</a>`
+        +`，再手動放進「素材/我的聲音」。`;
+    };
+    try{
+      const r=await fetch("/save_narration?name="+nm,
+        {method:"POST",headers:{"Content-Type":mt},body:blob});
+      const d=await r.json();
+      if(d.error){toast(d.error); rescue(); return;}
+      $("#recHint").textContent=`已存成 ${d.name}（${d.duration} 秒）`;
+      $("#narrSum").textContent=`最新：${d.name} · ${d.duration}秒`;
+      toast(`旁白存好了：${d.name}（${d.duration} 秒）`);
+      loadNarrs();
+    }catch(e){toast("存檔連線失敗"); rescue();}
+  };
+  narrRec.start();
+  narrOn=true; narrT0=Date.now();
+  $("#recBtn").textContent="■ 停止錄音"; $("#recBtn").classList.add("stop");
+  $("#recTime").classList.add("on");
+  $("#recHint").textContent="錄音中…照著上面念，念完按停止。";
+  narrTimer=setInterval(()=>{
+    const s=Math.floor((Date.now()-narrT0)/1000);
+    $("#recTime").textContent=`${s/60|0}:${String(s%60).padStart(2,"0")}`;
+  },250);
+}
+function stopNarr(){
+  if(!narrOn) return;
+  narrOn=false; clearInterval(narrTimer);
+  $("#recBtn").textContent="● 開始錄音"; $("#recBtn").classList.remove("stop");
+  $("#recTime").classList.remove("on");
+  narrRec.stop();
+}
+
+async function loadNarrs(){
+  const box=$("#narrList"); if(!box) return;
+  box.innerHTML="";
+  try{
+    const d=await (await fetch("/narrations")).json();
+    d.items.forEach(it=>{
+      const el=document.createElement("div"); el.className="narr-item";
+      const nm=document.createElement("span"); nm.className="nm"; nm.textContent=it.name;
+      const du=document.createElement("span"); du.className="dur"; du.textContent=it.duration+"s";
+      const wh=document.createElement("span"); wh.className="w"; wh.textContent=it.when;
+      const au=document.createElement("audio"); au.controls=true; au.preload="none";
+      au.src="/narr_audio?name="+encodeURIComponent(it.name);
+      el.append(nm,du,wh,au); box.appendChild(el);
+    });
+  }catch(e){}
+}
+
 // ---- 素材庫 ----
 async function loadLib(){
   const box=$("#libList"); box.innerHTML="";
@@ -385,6 +540,7 @@ async function loadLib(){
   }catch(e){/* 伺服器沒起來就算了 */}
 }
 loadLib();
+loadNarrs();
 
 // 初始：把已開啟的影片接回來
 fetch("/state").then(r=>r.json()).then(d=>{

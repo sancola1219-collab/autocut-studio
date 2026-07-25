@@ -29,3 +29,6 @@ voicecut/_*.py
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# 語音複製的獨立環境（很大，不進版控）
+.venv_voiceclone/

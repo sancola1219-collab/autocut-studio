@@ -10,6 +10,7 @@ autocut — 自動剪片一條龍
   python autocut.py 片1.mp4 片2.mp4 片3.mp4            # 多支依序串接再上字幕
   python autocut.py 影片.mp4 --layout both --music auto
   python autocut.py 素材.mp4 --script 稿子.txt --layout v
+  python autocut.py 素材.mp4 --narration 我的錄音.m4a  # 模式C：用自己的聲音當旁白
   python autocut.py 影片.mp4 --subs 改好的字幕.srt     # 用改過的字幕重燒
   python autocut.py --list-voices                      # 看所有配音聲音
   python autocut.py --interactive                      # 問答模式（拖拉bat用這個）
@@ -429,13 +430,22 @@ def split_sentences(text: str):
     return sents
 
 
+GAP_SHORT, GAP_SENT, GAP_PARA = 0.16, 0.34, 0.9
+
+
 def parse_script(text: str, default_voice: str):
     """逐行解析文字稿。行首 [聲音] 或 聲音： 可切換配音員（沿用到下一次切換），
-    認不得的名字當一般文字保留。回傳 [(voice_id, 句子), ...]"""
-    pairs, cur = [], default_voice
+    認不得的名字當一般文字保留。回傳 [(voice_id, 句子, 後面停多久), ...]
+
+    停頓長短照標點與段落決定，像真人那樣有快有慢：話沒說完（逗號結尾）停很短、
+    一句講完停一下、遇到空行當成換段落，多喘一口氣。
+    """
+    out, cur = [], default_voice
     for line in text.replace("\r", "\n").split("\n"):
         line = line.strip()
         if not line:
+            if out:            # 空行＝換段落，讓前一句後面多停一下換氣
+                out[-1] = (out[-1][0], out[-1][1], GAP_PARA)
             continue
         m = (re.match(r"^\[([^\[\]]{1,40})\]\s*[：:]?\s*(.*)$", line)
              or re.match(r"^([^\s：:]{1,12})[：:]\s*(.*)$", line))
@@ -446,18 +456,21 @@ def parse_script(text: str, default_voice: str):
                 line = m.group(2).strip()
                 if not line:
                     continue
-        pairs.extend((cur, s) for s in split_sentences(line))
-    return pairs
+        for s in split_sentences(line):
+            gap = GAP_SHORT if s[-1] in "，,、；;：:" else GAP_SENT
+            out.append((cur, s, gap))
+    return out
 
 
-async def _tts_batch(pairs, rate, tmp: Path):
+async def _tts_batch(pairs, rate, pitch, tmp: Path):
     import edge_tts
     files = []
-    for i, (v, s) in enumerate(pairs):
+    for i, (v, s, _g) in enumerate(pairs):
         mp3 = tmp / f"tts_{i:04d}.mp3"
         for attempt in range(3):
             try:
-                await edge_tts.Communicate(s, voice=v, rate=rate).save(str(mp3))
+                await edge_tts.Communicate(s, voice=v, rate=rate,
+                                           pitch=pitch).save(str(mp3))
                 break
             except Exception:
                 if attempt == 2:
@@ -468,40 +481,45 @@ async def _tts_batch(pairs, rate, tmp: Path):
     return files
 
 
-def tts_narration(script_text: str, voice: str, rate: str, tmp: Path):
+def tts_narration(script_text: str, voice: str, rate: str, tmp: Path,
+                  pitch: str = "+0Hz"):
     """回傳 (segments, 旁白音檔, 總長)"""
     pairs = parse_script(to_traditional(script_text), voice)
     if not pairs:
         die("文字稿是空的。")
-    n_voices = len({v for v, _ in pairs})
+    n_voices = len({v for v, _s, _g in pairs})
     who = f"多聲音對話（{n_voices} 種聲音）" if n_voices > 1 else f"聲音：{voice}"
     print(f"\n【TTS 配音】{who}（需要網路連線）")
     try:
-        mp3s = asyncio.run(_tts_batch(pairs, rate, tmp))
+        mp3s = asyncio.run(_tts_batch(pairs, rate, pitch, tmp))
     except Exception as e:
         die(f"TTS 失敗（檢查一下網路？）：{e}")
 
-    gap = 0.28
-    gap_wav = tmp / "gap.wav"
-    run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
-         "-t", f"{gap}", "-c:a", "pcm_s16le", gap_wav])
+    # 每種停頓長度做一個靜音檔，句子之間照需要插入
+    gap_wavs = {}
+    for g in sorted({g for _v, _s, g in pairs}):
+        gw = tmp / f"gap_{int(g * 1000)}.wav"
+        run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+             "-t", f"{g}", "-c:a", "pcm_s16le", gw])
+        gap_wavs[g] = gw
 
-    segs, wavs, cursor = [], [], 0.0
-    for mp3, (_v, sent) in zip(mp3s, pairs):
+    segs, wavs, gaps, cursor = [], [], [], 0.0
+    for mp3, (_v, sent, g) in zip(mp3s, pairs):
         wav = mp3.with_suffix(".wav")
         run(["ffmpeg", "-y", "-i", mp3, "-ar", "48000", "-ac", "2",
              "-c:a", "pcm_s16le", wav])
         d = probe_duration(wav)
         segs.append((cursor, cursor + d, sent))
         wavs.append(wav)
-        cursor += d + gap
+        gaps.append(g)
+        cursor += d + g
 
     lst = tmp / "concat.txt"
     entries = []
     for i, w in enumerate(wavs):
         entries.append(f"file '{w.name}'")
         if i < len(wavs) - 1:
-            entries.append(f"file '{gap_wav.name}'")
+            entries.append(f"file '{gap_wavs[gaps[i]].name}'")
     lst.write_text("\n".join(entries), encoding="utf-8")
 
     narration = tmp / "narration.wav"
@@ -808,7 +826,9 @@ def main():
     ap.add_argument("--music", help="背景音樂檔，或 auto＝從「背景音樂」資料夾隨機挑")
     ap.add_argument("--music-vol", type=float, default=None,
                     help="音樂音量 0~1（預設：有人聲 0.22、純音樂 0.5）")
-    ap.add_argument("--narration", help="模式B重燒用：現成旁白音檔（搭配 --subs）")
+    ap.add_argument("--narration",
+                    help="旁白音檔。單獨用＝模式C（用你自己錄的聲音，自動聽打上字幕）；"
+                         "搭配 --subs＝重燒用（不重新配音）")
     ap.add_argument("--layout", choices=["h", "v", "both"], default="h",
                     help="h橫式 v直式 both都要")
     ap.add_argument("--model", default="medium",
@@ -817,18 +837,22 @@ def main():
                     help="TTS 聲音代號（--list-voices 看清單），或完整聲音 ID")
     ap.add_argument("--list-voices", action="store_true", help="列出可用聲音")
     ap.add_argument("--rate", default="+0%", help="TTS 語速，例如 +10%% 或 --rate=-10%%")
+    ap.add_argument("--pitch", default="+0Hz",
+                    help="TTS 音高，壓低一點比較沉穩自然，例如 --pitch=-8Hz")
     ap.add_argument("--keep-ambient", action="store_true",
                     help="配音模式下保留素材原本的環境音（小聲墊底）")
     ap.add_argument("--interactive", action="store_true", help="問答模式")
-    # argparse 會把 "-10%" 當成未知選項，先幫使用者把 --rate -10% 併成 --rate=-10%
+    # argparse 會把 "-10%"、"-8Hz" 當成未知選項，先幫使用者併成 --rate=-10% 的寫法
+    NEG_OK = {"--rate": r"[+-]?\d{1,3}%", "--pitch": r"[+-]?\d{1,3}Hz"}
     argv, skip = [], False
     raw = sys.argv[1:]
     for i, a in enumerate(raw):
         if skip:
             skip = False
             continue
-        if a == "--rate" and i + 1 < len(raw) and re.fullmatch(r"[+-]\d{1,3}%", raw[i + 1]):
-            argv.append(f"--rate={raw[i + 1]}")
+        if (a in NEG_OK and i + 1 < len(raw)
+                and re.fullmatch(NEG_OK[a], raw[i + 1], re.I)):
+            argv.append(f"{a}={raw[i + 1]}")
             skip = True
         else:
             argv.append(a)
@@ -876,6 +900,17 @@ def main():
         die(f"不認識的聲音：{args.voice}（用 --list-voices 看清單）")
     if not re.fullmatch(r"[+-]\d{1,3}%", args.rate):
         die(f"--rate 格式要像 +10%% 這樣：{args.rate}")
+    # edge-tts 只吃大寫 Hz，順手幫使用者把 -8hz 修正掉
+    if re.fullmatch(r"[+-]\d{1,3}hz", args.pitch, re.I):
+        args.pitch = args.pitch[:-2] + "Hz"
+    if not re.fullmatch(r"[+-]\d{1,3}Hz", args.pitch):
+        die(f"--pitch 格式要像 --pitch=-8Hz 這樣：{args.pitch}")
+    # 三種來源同時給時講清楚誰贏，不要靜默忽略
+    if args.subs and args.script:
+        print("【提醒】同時給了 --subs 與 --script，這次用 --subs（不重新配音）")
+    elif args.narration and args.script:
+        print("【提醒】同時給了 --narration 與 --script，這次用 --narration"
+              "（用你的錄音，不做 TTS）")
 
     with tempfile.TemporaryDirectory(prefix="autocut_") as td:
         tmp = Path(td)
@@ -896,13 +931,36 @@ def main():
                 if not narration.exists():
                     die(f"找不到旁白檔：{narration}")
                 total = probe_duration(narration)
+                if total <= 0:
+                    die(f"讀不到旁白長度，檔案可能壞了：{narration}")
                 print(f"【旁白】使用現成旁白：{narration.name}（{total:.1f} 秒）")
+        elif args.narration:
+            # 模式C：用自己錄的旁白，聽打它來取得字幕時間點
+            narration = Path(args.narration).expanduser().resolve()
+            if not narration.exists():
+                die(f"找不到旁白檔：{narration}")
+            # 一律先轉成乾淨的 wav：webm/m4a 常常讀不到時長，轉檔後才準
+            norm = tmp / "narration_in.wav"
+            run(["ffmpeg", "-y", "-i", narration, "-vn",
+                 "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", norm])
+            total = probe_duration(norm)
+            if total <= 0:
+                die(f"讀不到旁白長度，檔案可能壞了：{narration}")
+            narration = norm
+            print(f"【旁白】用你自己的錄音：{Path(args.narration).name}"
+                  f"（{total:.1f} 秒）")
+            segments = transcribe(narration, args.model, tmp)
+            keep = OUT_DIR / f"{stem}_旁白.wav"
+            # 使用者可能直接指定「輸出」裡的檔案，那就是同一個檔，不用也不能複製
+            if keep.resolve() != Path(args.narration).expanduser().resolve():
+                narr_keep = remove_stale(keep)
+                shutil.copy2(narration, narr_keep)
         elif args.script:
             sp = Path(args.script).expanduser().resolve()
             if not sp.exists():
                 die(f"找不到文字稿：{sp}")
             segments, narration, total = tts_narration(
-                read_text_smart(sp), voice, args.rate, tmp)
+                read_text_smart(sp), voice, args.rate, tmp, pitch=args.pitch)
             # 旁白留一份，之後只修字幕錯字就不用重新配音
             narr_keep = OUT_DIR / f"{stem}_旁白.wav"
             shutil.copy2(narration, narr_keep)
@@ -950,6 +1008,8 @@ def main():
         tts_opts += f" --voice {args.voice}"
     if args.rate != "+0%":
         tts_opts += f" --rate={args.rate}"
+    if args.pitch != "+0Hz":
+        tts_opts += f" --pitch={args.pitch}"
     if narr_keep:
         print("改完想重燒：")
         print(f'  只修字幕錯字：python autocut.py {vids_arg}{opts} --subs "{srt_path}" '

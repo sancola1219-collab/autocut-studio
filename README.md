@@ -41,7 +41,22 @@ Windows 使用者可直接把影片**拖到 `拖影片到這裡.bat`**，用問�
 python voicecut/server.py       # 啟動後瀏覽器開 http://127.0.0.1:8765
 ```
 
-Windows 直接雙擊 `口說剪片台.bat`。
+Windows 直接雙擊 `口說剪片台.bat`。面板也內建**提詞機錄旁白**：把稿子貼上去、按錄音照著念，存好就能直接拿去合成。
+
+### 3. 用自己的聲音當旁白
+
+兩種做法：
+
+```bash
+# A. 自己念完整篇（最自然，字幕時間點自動對齊你的語速）
+python autocut.py 素材.mp4 --narration 我的錄音.m4a
+
+# B. 只給一段聲音樣本，讓 AI 用你的音色念稿子（需另外裝環境，見下）
+python voicecut/voiceclone.py --ref 我的聲音.wav --script 稿子.txt --out 旁白.wav
+python voicecut/fitclips.py 旁白字幕.srt 工作夾 --narr 旁白.wav 片1.mp4 片2.mp4
+```
+
+`fitclips.py` 會把每段畫面調成**剛好配合旁白的段落長度**，讓場景切換自動落在換氣停頓裡。
 
 ---
 
@@ -56,6 +71,22 @@ pip install -r requirements.txt
 第一次跑聽打會自動下載 Whisper 模型（medium 約 1.5GB，只有第一次）。
 AI 配音使用微軟線上語音，需要網路；聽打字幕則完全離線。
 
+### 音色複製（選用）
+
+要用「一段聲音樣本 → 複製音色念稿」的功能，另外裝一個獨立環境，避免弄壞上面的相依：
+
+```bash
+python -m venv .venv_voiceclone
+.venv_voiceclone/Scripts/pip install coqui-tts "transformers<5" pypinyin
+.venv_voiceclone/Scripts/pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+```
+
+幾個踩過的雷：`transformers` 必須 <5、`torch` 必須 <2.9（2.9+ 需要 torchcodec，而它不支援 ffmpeg 8）、中文要 `pypinyin`、**不要裝 `cutlet`**（日文用，會需要 MeCab 字典）。
+
+CPU 實測約 6.6x 實時（50 秒旁白約 4 分鐘）。
+
+> ⚠️ **XTTS-v2 的模型授權是 CPML，禁止商業用途。** 要商用請改接 OpenVoice v2（MIT）或 CosyVoice2（Apache-2.0）。
+
 ---
 
 ## 📁 目錄
@@ -67,9 +98,12 @@ autocut.py            一條龍自動剪片
 整理素材.bat            把「素材」裡的影片按拍攝時間標註歸檔
 voicecut/
   server.py           面板後端（Python 內建伺服器，零額外安裝）
-  panel.html          面板前端
+  panel.html          面板前端（含提詞機錄旁白）
   parser.py           口說命令解析
   engine.py           剪輯引擎（剪掉/變速/靜音/音量/字幕）
+  voiceclone.py       音色複製（XTTS-v2，需獨立環境）
+  fitclips.py         把畫面長度對齊旁白段落，切換點落在換氣處
+素材/我的聲音/         錄音與聲音樣本放這裡
 素材/                 影片丟這裡（面板素材庫、問答編號都從這裡挑）
 背景音樂/              把 mp3/wav 放這裡
 輸出/                 成品出現在這裡
