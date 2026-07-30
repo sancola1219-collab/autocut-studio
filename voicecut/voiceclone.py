@@ -126,6 +126,13 @@ def main():
     ap.add_argument("--breath-vol", type=float, default=0.55,
                     help="呼吸聲音量倍率，預設 0.55")
     ap.add_argument("--seed", type=int, help="固定隨機種子，方便重現同一次結果")
+    ap.add_argument("--verify", action="store_true",
+                    help="每句合成完用 Whisper 驗念字，錯的句子自動重試（最多3次）")
+    ap.add_argument("--verify-python",
+                    default=r"C:\Users\user\AppData\Local\Programs\Python\Python312\python.exe",
+                    help="主環境的 python（有 faster-whisper 的那個）")
+    ap.add_argument("--verify-pass", type=float, default=0.92,
+                    help="單句通過門檻（正規化後的吻合度）")
     args = ap.parse_args()
 
     ref = Path(args.ref).resolve()
@@ -153,6 +160,46 @@ def main():
     def say(text):
         return np.asarray(tts.tts(text=text, speaker_wav=str(ref),
                                   language=args.lang, **tune))
+
+    # 常駐驗證員：載一次 Whisper，之後每句幾秒內回覆念字對不對
+    verifier = None
+    if args.verify:
+        import subprocess as sp
+        vp = Path(__file__).resolve().parent / "verifier.py"
+        print("啟動念字驗證員…（載入 Whisper，約 1 分鐘）", flush=True)
+        verifier = sp.Popen([args.verify_python, str(vp)],
+                            stdin=sp.PIPE, stdout=sp.PIPE,
+                            encoding="utf-8", errors="replace", bufsize=1)
+        line = verifier.stdout.readline().strip()
+        while line and line != "READY":
+            line = verifier.stdout.readline().strip()
+        print("驗證員就緒\n", flush=True)
+
+    def verified_say(text, tmpdir, idx):
+        """合成＋驗證；沒過就換種子重試，回傳最好的一次。"""
+        best, best_ratio = None, -1.0
+        for attempt in range(3):
+            w = say(text)
+            if verifier is None:
+                return w, 1.0, ""
+            import torch
+            probe = Path(tmpdir) / f"_v_{idx}_{attempt}.wav"
+            write_wav(probe, sr, [w])
+            verifier.stdin.write(f"{probe}\t{text}\n")
+            ratio_s, _, heard = verifier.stdout.readline().partition("\t")
+            try:
+                ratio = float(ratio_s)
+            except ValueError:
+                ratio = 0.0
+            probe.unlink(missing_ok=True)
+            if ratio > best_ratio:
+                best, best_ratio, best_heard = w, ratio, heard.strip()
+            if ratio >= args.verify_pass:
+                break
+            print(f"      念字沒過（{ratio:.2f}：{heard.strip()[:24]}），重試…",
+                  flush=True)
+            torch.manual_seed((args.seed or 0) + idx * 100 + attempt + 1)
+        return best, best_ratio, best_heard
 
     # 呼吸聲：載進來，插在句子之間讓停頓不那麼「乾」
     breaths = []
@@ -184,8 +231,10 @@ def main():
     print(f"共 {len(pairs)} 句\n")
     chunks, marks, cursor = [], [], 0.0
     t0 = time.time()
+    out_dir = Path(args.out).resolve().parent
+    out_dir.mkdir(parents=True, exist_ok=True)
     for i, (sent, gap, tags) in enumerate(pairs, 1):
-        w = say(sent)
+        w, ratio, _heard = verified_say(sent, out_dir, i)
         if tags:
             w = prosody.apply_tags(w, sr, tags)
         d = len(w) / sr
@@ -194,8 +243,15 @@ def main():
         chunks.append(gap_filler(gap, sr, breaths, i - 1, np))
         cursor += d + gap
         tag_txt = "".join(f"{{{t}}}" for t in sorted(tags)) if tags else ""
-        print(f"  [{i}/{len(pairs)}] {d:5.1f}s  {sent[:24]}{tag_txt}"
+        ok = "" if verifier is None else f"  念字{ratio * 100:.0f}%"
+        print(f"  [{i}/{len(pairs)}] {d:5.1f}s  {sent[:24]}{tag_txt}{ok}"
               f"   （已跑 {time.time() - t0:.0f}s）", flush=True)
+    if verifier is not None:
+        try:
+            verifier.stdin.write("QUIT\n")
+            verifier.wait(timeout=10)
+        except Exception:
+            verifier.kill()
 
     out = Path(args.out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)

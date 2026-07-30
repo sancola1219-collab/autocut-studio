@@ -15,7 +15,9 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocut
+import prosody
 
 # Whisper 會把國字數字寫成阿拉伯數字，這不算念錯
 D = {"零": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
@@ -31,11 +33,21 @@ def _cn2num(m):
     return str((D[a] if a else 1) * 10 + (D[b] if b else 0))
 
 
+# 同音的語助詞，Whisper 寫哪個字都算對
+PARTICLES = {"哎": "欸", "誒": "欸", "唉": "欸",
+             "哦": "喔", "噢": "喔", "喔": "喔",
+             "呀": "啊", "啊": "啊",
+             "咧": "啦", "嘞": "啦"}
+
+
 def normalize(s: str) -> str:
+    s = prosody.TAG_RE.sub("", s)          # 先拿掉 {拖}{揚} 這類語氣標記
     s = re.sub(r"[^\w一-鿿]", "", s)
     # 先處理「十」的組合，再處理單獨的數字，否則十一會變成 101
     s = re.sub(r"[一二兩三四五六七八九]?十[一二兩三四五六七八九]?", _cn2num, s)
     s = re.sub(r"[零一二兩三四五六七八九]", _cn2num, s)
+    for k, v in PARTICLES.items():
+        s = s.replace(k, v)
     return s
 
 
