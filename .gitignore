@@ -32,3 +32,4 @@ desktop.ini
 
 # 語音複製的獨立環境（很大，不進版控）
 .venv_voiceclone/
+voicecut/_voices_cache.json

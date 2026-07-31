@@ -96,24 +96,36 @@ VOICE_ALIASES = {
 AF = "aformat=sample_rates=48000:channel_layouts=stereo"
 
 
+def _voices_mod():
+    sys.path.insert(0, str(BASE / "voicecut"))
+    import voices as _v
+    return _v
+
+
 def resolve_voice(name: str):
-    """代號／中文別名／完整聲音 ID → 完整聲音 ID；認不得回傳 None。"""
-    name = name.strip()
-    if name.lower() in VOICES:
-        return VOICES[name.lower()]
-    if name in VOICE_ALIASES:
-        return VOICES[VOICE_ALIASES[name]]
-    if re.fullmatch(r"[a-z]{2,3}-[A-Z]{2,4}-\w+Neural", name):
-        return name
-    return None
+    """代號／中文別名／完整聲音 ID → 完整聲音 ID；認不得回傳 None。
+    含中文 14 種（有東北話、陝西話）與常用外語，也吃 edge-tts 全部 318 種的 ID。"""
+    try:
+        return _voices_mod().resolve(name)
+    except Exception:
+        # 退回內建小表，確保 voices.py 有問題時主流程還能跑
+        n = (name or "").strip()
+        if n.lower() in VOICES:
+            return VOICES[n.lower()]
+        if n in VOICE_ALIASES:
+            return VOICES[VOICE_ALIASES[n]]
+        if re.fullmatch(r"[a-z]{2,3}-[A-Z]{2,4}(-[a-z]+)?-\w+Neural", n):
+            return n
+        return None
 
 
 def print_voices():
-    print("可用聲音（--voice 代號；文字稿行首寫 [代號] 或 [中文別名] 可切換）：")
-    for code, vid in VOICES.items():
-        print(f"  {code:10s} {VOICE_DESC.get(code, ''):20s} {vid}")
-    print("中文別名：" + "、".join(f"[{k}]={v}" for k, v in VOICE_ALIASES.items()))
-    print("也可直接給完整聲音 ID；全部語言的清單：python -m edge_tts --list-voices")
+    print("（--voice 用代號或中文別名；文字稿行首寫 [代號] 可切換聲音）\n")
+    try:
+        _voices_mod().print_curated()
+    except Exception:
+        for code, vid in VOICES.items():
+            print(f"  {code:10s} {VOICE_DESC.get(code, ''):20s} {vid}")
 
 
 # ---------------------------------------------------------------- 小工具
@@ -534,13 +546,25 @@ def tts_narration(script_text: str, voice: str, rate: str, tmp: Path,
 
 # ---------------------------------------------------------------- 多支串接
 
-def join_videos(paths, tmp: Path, transition: str = "fade"):
-    """把多支影片統一規格後依序串接成一支，回傳串接檔（放在 tmp 內）。"""
+def join_videos(paths, tmp: Path, transition: str = "fade", tdur: float = 0.5):
+    """把多支影片統一規格後依序串接成一支，回傳串接檔（放在 tmp 內）。
+
+    transition 可以是 58 種 xfade 之一、群組名、「隨機」或「無」。
+    xfade 會吃掉重疊的時間，所以每段先用 tpad 把尾巴補回 tdur 秒，
+    這樣每段「內容起點」的時間不會位移，旁白對位才不會跑掉。
+    """
+    sys.path.insert(0, str(BASE / "voicecut"))
+    import transitions as _tr
+    try:
+        pick = _tr.picker(transition)
+    except ValueError as e:
+        die(str(e))
     w, h, _, _ = probe_video(paths[0])
     w, h = max(2, w - w % 2), max(2, h - h % 2)
-    print(f"\n【串接】共 {len(paths)} 支，統一為 {w}x{h}（以第一支為準）")
+    how = "直接相接" if pick is None else f"{transition} 轉場 {tdur:.1f}s"
+    print(f"\n【串接】共 {len(paths)} 支，統一為 {w}x{h}（以第一支為準）｜{how}")
     fd = 0.4
-    segs = []
+    segs, durs = [], []
     for i, p in enumerate(paths):
         _, _, _, has_aud = probe_video(p)
         dur = probe_vstream_duration(p)   # 以影像軌為準，音軌較長也不會凍格
@@ -550,32 +574,63 @@ def join_videos(paths, tmp: Path, transition: str = "fade"):
         vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
               f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,setsar=1")
         af = AF
-        fd_i = min(fd, dur / 2)           # 極短片縮短轉場，避免 fade in/out 重疊變全黑
-        if transition == "fade" and fd_i >= 0.05:
-            st_out = max(0.0, dur - fd_i)
-            vf += (f",fade=t=in:st=0:d={fd_i:.3f},"
-                   f"fade=t=out:st={st_out:.3f}:d={fd_i:.3f}")
-            af += (f",afade=t=in:st=0:d={fd_i:.3f},"
-                   f"afade=t=out:st={st_out:.3f}:d={fd_i:.3f}")
+        last = (i == len(paths) - 1)
+        pad = tdur if (pick is not None and not last) else 0.0
+        if pad:
+            # 尾巴補 pad 秒（凍住最後一格＋靜音），等下讓 xfade 吃掉
+            vf += f",tpad=stop_mode=clone:stop_duration={pad:.3f}"
+            af += f",apad=pad_dur={pad:.3f}"
+        elif pick is None and fd >= 0.05 and dur > fd * 2:
+            # 硬切模式維持原本的頭尾微淡，避免爆音爆畫面
+            vf += (f",fade=t=in:st=0:d={fd:.3f},"
+                   f"fade=t=out:st={dur - fd:.3f}:d={fd:.3f}")
+            af += (f",afade=t=in:st=0:d={fd:.3f},"
+                   f"afade=t=out:st={dur - fd:.3f}:d={fd:.3f}")
+        seg_len = dur + pad
         cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", p]
         if has_aud:
             cmd += ["-map", "0:v:0", "-map", "0:a:0"]
         else:   # 沒聲音的補靜音軌，串接後聲音才不會錯位
-            cmd += ["-f", "lavfi", "-t", f"{dur:.3f}", "-i",
+            cmd += ["-f", "lavfi", "-t", f"{dur + pad:.3f}", "-i",
                     "anullsrc=r=48000:cl=stereo",
                     "-map", "0:v:0", "-map", "1:a"]
-        cmd += ["-t", f"{dur:.3f}", "-vf", vf, "-af", af,
+        cmd += ["-t", f"{seg_len:.3f}", "-vf", vf, "-af", af,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
                 "-ar", "48000", seg]
         print(f"  [{i + 1}/{len(paths)}] {p.name}（{dur:.1f} 秒）")
         run(cmd)
         segs.append(seg)
-    lst = tmp / "join.txt"
-    lst.write_text("\n".join(f"file '{s.name}'" for s in segs), encoding="utf-8")
+        durs.append(dur)
+
     joined = tmp / "joined.mp4"
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst,
-         "-c", "copy", joined], cwd=tmp)
+    if pick is None or len(segs) == 1:
+        lst = tmp / "join.txt"
+        lst.write_text("\n".join(f"file '{s.name}'" for s in segs),
+                       encoding="utf-8")
+        run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst,
+             "-c", "copy", joined], cwd=tmp)
+    else:
+        used = [pick(i) for i in range(len(segs) - 1)]
+        print("  轉場：" + " → ".join(used))
+        vfc, vlab, _ = _tr.build_chain(len(segs), durs, tdur,
+                                       lambda i: used[i], "v")
+        # xfade 沒有音訊版，音訊用 acrossfade 串（等長交叉，對位一致）
+        afc, alab = [], "[0:a]"
+        for i in range(1, len(segs)):
+            nxt = f"[a{i}]"
+            afc.append(f"{alab}[{i}:a]acrossfade=d={tdur:.3f}:"
+                       f"c1=tri:c2=tri{nxt}")
+            alab = nxt
+        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+        for s in segs:
+            cmd += ["-i", str(s)]
+        cmd += ["-filter_complex", ";".join(vfc + afc),
+                "-map", vlab, "-map", alab,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+                "-ar", "48000", str(joined)]
+        run(cmd, cwd=tmp)
     print(f"  串接完成，總長 {probe_duration(joined):.1f} 秒")
     return joined
 
@@ -836,8 +891,13 @@ def interactive_fill(args):
 def main():
     ap = argparse.ArgumentParser(description="自動剪片：字幕／配音／音樂一條龍")
     ap.add_argument("video", nargs="*", help="影片檔案（給多個＝依序串接成一支）")
-    ap.add_argument("--transition", choices=["fade", "none"], default="fade",
-                    help="多支串接的轉場：fade淡入淡出（預設）/ none直接相接")
+    ap.add_argument("--transition", default="fade",
+                    help="多支串接的轉場：58 種任選、群組名（淡出/推入/擦除/幾何/特效）、"
+                         "隨機、無。完整清單：python voicecut/transitions.py")
+    ap.add_argument("--transition-dur", type=float, default=0.5,
+                    help="轉場長度秒數（預設 0.5）")
+    ap.add_argument("--list-transitions", action="store_true",
+                    help="列出所有轉場")
     ap.add_argument("--photo-dur", type=float, default=4.0,
                     help="每張照片變成幾秒的動態片段（預設 4 秒）")
     ap.add_argument("--style", default="plain",
@@ -884,6 +944,12 @@ def main():
 
     if args.list_voices:
         print_voices()
+        return
+
+    if args.list_transitions:
+        sys.path.insert(0, str(BASE / "voicecut"))
+        import transitions as _tr
+        _tr.print_all()
         return
 
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -963,7 +1029,8 @@ def main():
             print(f"  共處理 {n} 張")
 
         if len(videos) > 1:
-            video = join_videos(videos, tmp, args.transition)
+            video = join_videos(videos, tmp, args.transition,
+                                args.transition_dur)
             stem = f"{orig_names[0]}_合併{len(videos)}支"
         else:
             video = videos[0]
@@ -1044,8 +1111,10 @@ def main():
     opts = ""
     if any(v.suffix.lower() in IMAGE_EXTS for v in reburn) and args.photo_dur != 4.0:
         opts += f" --photo-dur {args.photo_dur}"
-    if len(reburn) > 1 and args.transition == "none":
-        opts += " --transition none"
+    if len(reburn) > 1 and args.transition != "fade":
+        opts += f" --transition {args.transition}"
+    if len(reburn) > 1 and args.transition_dur != 0.5:
+        opts += f" --transition-dur {args.transition_dur}"
     if args.layout != "h":
         opts += f" --layout {args.layout}"
     if music:

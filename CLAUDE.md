@@ -18,6 +18,8 @@ autocut.py                 一條龍：模式A聽打字幕 / 模式B TTS配音 /
                            多支串接(nargs+--transition)、直式/橫式、音樂閃避
                            照片自動 Ken Burns(--photo-dur)、字幕風格(--style)、標題(--title)
 voicecut/
+  voices.py                318 種配音（中文14含東北/陝西話＋外語，可搜尋）
+  transitions.py           58 種 xfade 轉場（五類分組、隨機、群組隨機）
   photos.py                ★照片→Ken Burns 動態片段（六種運鏡輪換）
   styles.py                ★字幕風格庫 plain/cute/cinema/rec/neon（可重複用）
   server.py + panel.html   口說剪片台（瀏覽器面板，port 8765）
