@@ -44,14 +44,16 @@ MEDIA_DIR = BASE / "素材"
 MUSIC_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm",
               ".ts", ".mts", ".wmv", ".flv"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".avif"}
+MEDIA_EXTS = VIDEO_EXTS | IMAGE_EXTS
 
 
 def list_media(limit=9):
-    """素材資料夾裡最新的影片（含子資料夾），新→舊。"""
+    """素材資料夾裡最新的影片與照片（含子資料夾），新→舊。"""
     if not MEDIA_DIR.exists():
         return []
     vids = [p for p in MEDIA_DIR.rglob("*")
-            if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
+            if p.is_file() and p.suffix.lower() in MEDIA_EXTS]
     vids.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return vids[:limit]
 
@@ -582,7 +584,8 @@ def join_videos(paths, tmp: Path, transition: str = "fade"):
 
 def render(video: Path, out_path: Path, segments, vertical: bool, tmp: Path, *,
            narration: Path = None, total: float = None,
-           music: Path = None, music_vol: float = None, keep_ambient: bool = False):
+           music: Path = None, music_vol: float = None, keep_ambient: bool = False,
+           style: str = "plain", title: str = None):
     w, h, vdur, has_aud = probe_video(video)
     if vertical:
         out_w, out_h = 1080, 1920
@@ -591,7 +594,18 @@ def render(video: Path, out_path: Path, segments, vertical: bool, tmp: Path, *,
         out_w, out_h = w - w % 2, h - h % 2
 
     ass_file = tmp / ("subs_v.ass" if vertical else "subs_h.ass")
-    build_ass(segments, out_w, out_h, vertical, ass_file)
+    extra_vf = ""
+    if style and style != "plain":
+        sys.path.insert(0, str(BASE / "voicecut"))
+        import styles as _styles
+        ass_file.write_text(
+            _styles.build(segments, out_w, out_h, style, title=title,
+                          total=(total if total else None)),
+            encoding="utf-8")
+        extra_vf = _styles.video_filter(style)
+        print(f"  字幕風格：{style}")
+    else:
+        build_ass(segments, out_w, out_h, vertical, ass_file)
 
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "warning", "-stats"]
     if narration and total and vdur < total:
@@ -616,11 +630,14 @@ def render(video: Path, out_path: Path, segments, vertical: bool, tmp: Path, *,
             "crop=270:480,boxblur=10:2,eq=brightness=-0.08,scale=1080:1920[bg];"
             "[fga]scale=1080:1920:force_original_aspect_ratio=decrease:"
             "force_divisible_by=2[fg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,ass={ass_file.name}[v]"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
+            + (f",{extra_vf}" if extra_vf else "")
+            + f",ass={ass_file.name}[v]"
         )
     else:
-        vchain = (f"[0:v]crop=trunc(iw/2)*2:trunc(ih/2)*2,"
-                  f"ass={ass_file.name}[v]")
+        vchain = (f"[0:v]crop=trunc(iw/2)*2:trunc(ih/2)*2"
+                  + (f",{extra_vf}" if extra_vf else "")
+                  + f",ass={ass_file.name}[v]")
 
     # ---- 聲音鏈
     T = total if total else vdur
@@ -821,6 +838,13 @@ def main():
     ap.add_argument("video", nargs="*", help="影片檔案（給多個＝依序串接成一支）")
     ap.add_argument("--transition", choices=["fade", "none"], default="fade",
                     help="多支串接的轉場：fade淡入淡出（預設）/ none直接相接")
+    ap.add_argument("--photo-dur", type=float, default=4.0,
+                    help="每張照片變成幾秒的動態片段（預設 4 秒）")
+    ap.add_argument("--style", default="plain",
+                    choices=["plain", "cute", "cinema", "rec", "neon"],
+                    help="字幕風格：plain乾淨 cute可愛大字 cinema電影感 "
+                         "rec錄影機UI neon霓虹")
+    ap.add_argument("--title", help="畫面上方常駐的標題文字（選用）")
     ap.add_argument("--script", help="文字稿 .txt → 啟用 TTS 配音模式")
     ap.add_argument("--subs", help="現成 .srt 字幕（跳過聽打，直接燒）")
     ap.add_argument("--music", help="背景音樂檔，或 auto＝從「背景音樂」資料夾隨機挑")
@@ -879,7 +903,11 @@ def main():
     videos = [Path(v).expanduser().resolve() for v in args.video]
     for v in videos:
         if not v.exists():
-            die(f"找不到影片：{v}")
+            die(f"找不到檔案：{v}")
+        if v.suffix.lower() not in MEDIA_EXTS:
+            die(f"不認識的檔案格式：{v.name}\n"
+                f"影片支援 {' '.join(sorted(VIDEO_EXTS))}\n"
+                f"照片支援 {' '.join(sorted(IMAGE_EXTS))}（HEIC 請先轉成 JPG）")
 
     music = None
     if args.music:
@@ -916,12 +944,30 @@ def main():
         tmp = Path(td)
         narration = total = narr_keep = None
 
+        # 照片先變成 Ken Burns 影片片段（緩慢推拉），再跟影片一起處理
+        orig_names = [v.stem for v in videos]
+        orig_inputs = list(videos)          # 重燒提示要指回使用者原本給的檔案
+        if any(v.suffix.lower() in IMAGE_EXTS for v in videos):
+            sys.path.insert(0, str(BASE / "voicecut"))
+            import photos as _photos
+            pw, ph = (1080, 1920) if args.layout == "v" else (1920, 1080)
+            # 有影片的話跟第一支影片的尺寸對齊，避免串接時被縮放
+            first_vid = next((v for v in videos
+                              if v.suffix.lower() in VIDEO_EXTS), None)
+            if first_vid:
+                vw, vh, _, _ = probe_video(first_vid)
+                pw, ph = vw - vw % 2, vh - vh % 2
+            print(f"\n【照片】轉成 Ken Burns 動態片段（每張 {args.photo_dur:.1f} 秒）")
+            videos, n = _photos.convert_mixed(videos, tmp, pw, ph,
+                                              args.photo_dur)
+            print(f"  共處理 {n} 張")
+
         if len(videos) > 1:
             video = join_videos(videos, tmp, args.transition)
-            stem = f"{videos[0].stem}_合併{len(videos)}支"
+            stem = f"{orig_names[0]}_合併{len(videos)}支"
         else:
             video = videos[0]
-            stem = video.stem
+            stem = orig_names[0]
 
         if args.subs:
             segments = parse_srt(Path(args.subs).expanduser().resolve())
@@ -983,7 +1029,8 @@ def main():
                 video, out_path, segments, vertical, tmp,
                 narration=narration, total=total,
                 music=music, music_vol=args.music_vol,
-                keep_ambient=args.keep_ambient))
+                keep_ambient=args.keep_ambient,
+                style=args.style, title=args.title))
 
     print("\n" + "=" * 46)
     print("完工！檔案在這裡：")
@@ -991,9 +1038,13 @@ def main():
         print(f"  {o}")
     print(f"  {srt_path}  ← 字幕檔，有錯字可以改")
     # 重燒提示要帶齊當次的參數，照抄才會得到一樣的成品
-    vids_arg = " ".join(f'"{v}"' for v in videos)
+    # 用使用者原本給的路徑（照片轉出的暫存檔跟著 temp 目錄一起消失了）
+    reburn = orig_inputs if 'orig_inputs' in dir() else videos
+    vids_arg = " ".join(f'"{v}"' for v in reburn)
     opts = ""
-    if len(videos) > 1 and args.transition == "none":
+    if any(v.suffix.lower() in IMAGE_EXTS for v in reburn) and args.photo_dur != 4.0:
+        opts += f" --photo-dur {args.photo_dur}"
+    if len(reburn) > 1 and args.transition == "none":
         opts += " --transition none"
     if args.layout != "h":
         opts += f" --layout {args.layout}"
@@ -1003,6 +1054,10 @@ def main():
         opts += f" --music-vol {args.music_vol}"
     if args.keep_ambient:
         opts += " --keep-ambient"
+    if args.style != "plain":
+        opts += f" --style {args.style}"
+    if args.title:
+        opts += f' --title "{args.title}"'
     tts_opts = ""
     if args.voice != "hsiaochen":
         tts_opts += f" --voice {args.voice}"

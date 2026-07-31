@@ -5,7 +5,7 @@
 
 ## 固定分工（不用每次問）
 
-- 使用者丟素材進 `素材/`（影片為主；照片支援**還沒做**——要做的話是 Ken Burns 推拉）
+- 使用者丟素材進 `素材/`（**影片與照片都支援**，照片會自動變成 Ken Burns 動態片段）
 - **文案／字幕由 Claude 全權決定**：先抽幀看素材內容 → 定題材 → 寫「口語化」文案（要有語助詞、像講話，不要書面腔）
 - 缺背景音樂就自己合成（ffmpeg 正弦波疊墊底音，見 `背景音樂/` 現成例）或找明確可商用來源
 - 旁白用使用者的複製音色（見下）
@@ -16,7 +16,10 @@
 ```
 autocut.py                 一條龍：模式A聽打字幕 / 模式B TTS配音 / 模式C自錄旁白
                            多支串接(nargs+--transition)、直式/橫式、音樂閃避
+                           照片自動 Ken Burns(--photo-dur)、字幕風格(--style)、標題(--title)
 voicecut/
+  photos.py                ★照片→Ken Burns 動態片段（六種運鏡輪換）
+  styles.py                ★字幕風格庫 plain/cute/cinema/rec/neon（可重複用）
   server.py + panel.html   口說剪片台（瀏覽器面板，port 8765）
   parser.py / engine.py    口說命令解析 / 剪輯引擎
   fitclips.py              ★把每段畫面調成剛好配合旁白段落（換氣點=切換點）
@@ -69,7 +72,6 @@ voicecut/
 ## 未完成 / 待辦
 
 - 欣興電子神曲：歌詞與 Suno 曲風描述在 `素材/欣興電子/歌詞_欣興神曲.txt`，**等使用者用 Suno 生成歌曲檔**丟回來 → 抓歌詞時間軸 → 官網素材(已下載10張)做 MV
-- 照片素材支援（Ken Burns）還沒做
 - Claude in Chrome 擴充已裝但未連上（待重開桌面 App 再試）；連上後可直接操作他已登入的 Chrome 發抖音
 - `素材/2026-07-30/` 裡有一個 douyin-downloader 的 exe（下載工具殘留），使用者說要刪就刪
 
