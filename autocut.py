@@ -459,7 +459,7 @@ def parse_script(text: str, default_voice: str):
         line = line.strip()
         if not line:
             if out:            # 空行＝換段落，讓前一句後面多停一下換氣
-                out[-1] = (out[-1][0], out[-1][1], GAP_PARA)
+                out[-1] = (out[-1][0], out[-1][1], GAP_PARA, out[-1][3])
             continue
         m = (re.match(r"^\[([^\[\]]{1,40})\]\s*[：:]?\s*(.*)$", line)
              or re.match(r"^([^\s：:]{1,12})[：:]\s*(.*)$", line))
@@ -470,16 +470,29 @@ def parse_script(text: str, default_voice: str):
                 line = m.group(2).strip()
                 if not line:
                     continue
+        # 句尾的 {拖}{揚}{強} 語氣標記要拆掉，不然會被當成文字唸出來
+        line, line_tags = _prosody().parse_tags(line)
+        if not line:
+            continue
+        first = len(out)
         for s in split_sentences(line):
             gap = GAP_SHORT if s[-1] in "，,、；;：:" else GAP_SENT
-            out.append((cur, s, gap))
+            out.append((cur, s, gap, set()))
+        if line_tags and len(out) > first:
+            out[-1] = (*out[-1][:3], line_tags)
     return out
+
+
+def _prosody():
+    sys.path.insert(0, str(BASE / "voicecut"))
+    import prosody
+    return prosody
 
 
 async def _tts_batch(pairs, rate, pitch, tmp: Path):
     import edge_tts
     files = []
-    for i, (v, s, _g) in enumerate(pairs):
+    for i, (v, s, _g, _tg) in enumerate(pairs):
         mp3 = tmp / f"tts_{i:04d}.mp3"
         for attempt in range(3):
             try:
@@ -501,7 +514,7 @@ def tts_narration(script_text: str, voice: str, rate: str, tmp: Path,
     pairs = parse_script(to_traditional(script_text), voice)
     if not pairs:
         die("文字稿是空的。")
-    n_voices = len({v for v, _s, _g in pairs})
+    n_voices = len({v for v, _s, _g, _t in pairs})
     who = f"多聲音對話（{n_voices} 種聲音）" if n_voices > 1 else f"聲音：{voice}"
     print(f"\n【TTS 配音】{who}（需要網路連線）")
     try:
@@ -511,17 +524,42 @@ def tts_narration(script_text: str, voice: str, rate: str, tmp: Path,
 
     # 每種停頓長度做一個靜音檔，句子之間照需要插入
     gap_wavs = {}
-    for g in sorted({g for _v, _s, g in pairs}):
+    for g in sorted({g for _v, _s, g, _t in pairs}):
         gw = tmp / f"gap_{int(g * 1000)}.wav"
         run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
              "-t", f"{g}", "-c:a", "pcm_s16le", gw])
         gap_wavs[g] = gw
 
+    n_tag = sum(1 for _v, _s, _g, t in pairs if t)
+    if n_tag:
+        print(f"  語氣標記：{n_tag} 句要做尾音加工")
+
     segs, wavs, gaps, cursor = [], [], [], 0.0
-    for mp3, (_v, sent, g) in zip(mp3s, pairs):
+    for mp3, (_v, sent, g, tags) in zip(mp3s, pairs):
         wav = mp3.with_suffix(".wav")
         run(["ffmpeg", "-y", "-i", mp3, "-ar", "48000", "-ac", "2",
              "-c:a", "pcm_s16le", wav])
+        if tags:
+            # {拖}{揚}{強} 等：對波形做尾音加工（跟音色複製那條路同一套）
+            import wave as _wave
+            import numpy as _np
+            pr = _prosody()
+            with _wave.open(str(wav)) as _w:
+                _sr, _ch = _w.getframerate(), _w.getnchannels()
+                _a = _np.frombuffer(_w.readframes(_w.getnframes()),
+                                    dtype=_np.int16).astype(_np.float32) / 32768
+            if _ch > 1:
+                _a = _a.reshape(-1, _ch).mean(axis=1)
+            _a = pr.apply_tags(_a, _sr, tags)
+            # 一定要寫回原本的聲道數，不然跟其他句串接時會對不起來
+            _i16 = (_np.clip(_a, -1, 1) * 32767).astype(_np.int16)
+            if _ch > 1:
+                _i16 = _np.repeat(_i16[:, None], _ch, axis=1).ravel()
+            with _wave.open(str(wav), "wb") as _w:
+                _w.setnchannels(_ch)
+                _w.setsampwidth(2)
+                _w.setframerate(_sr)
+                _w.writeframes(_i16.tobytes())
         d = probe_duration(wav)
         segs.append((cursor, cursor + d, sent))
         wavs.append(wav)
@@ -989,7 +1027,21 @@ def main():
             if not music.exists():
                 die(f"找不到音樂檔：{music}")
 
-    voice = resolve_voice(args.voice)
+    # 人設名（溫柔姊姊、元氣少女…）會連語速音高一起帶進來，
+    # 但使用者自己下的 --rate / --pitch 優先
+    try:
+        _p = _voices_mod().persona(args.voice)
+    except Exception:
+        _p = None
+    if _p:
+        voice, p_rate, p_pitch = _p
+        if args.rate == "+0%":
+            args.rate = p_rate
+        if args.pitch == "+0Hz":
+            args.pitch = p_pitch
+        print(f"（人設「{args.voice}」→ {voice} 語速{args.rate} 音高{args.pitch}）")
+    else:
+        voice = resolve_voice(args.voice)
     if not voice:
         die(f"不認識的聲音：{args.voice}（用 --list-voices 看清單）")
     if not re.fullmatch(r"[+-]\d{1,3}%", args.rate):

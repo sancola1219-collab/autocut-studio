@@ -53,6 +53,44 @@ FOREIGN = {
 }
 ALL_CODES = {**CHINESE, **FOREIGN}
 
+# ── 人設：同一個聲音配上語速／音高，聽起來就是不同的人 ──────────────
+# (代號): (聲音, 語速, 音高, 說明)
+PERSONAS = {
+    # 女聲 ── 台灣
+    "溫柔姊姊":   ("hsiaochen", "-8%",  "-5Hz", "台灣女聲，放慢壓低，溫暖有耐心"),
+    "知性主播":   ("hsiaochen", "+2%",  "+0Hz", "台灣女聲，端正清楚，適合說明"),
+    "慵懶女聲":   ("hsiaochen", "-15%", "-9Hz", "很慢很低，深夜電台／ASMR 感"),
+    "元氣少女":   ("hsiaoyu",   "+9%",  "+9Hz", "台灣女聲，開朗有活力"),
+    "鄰家女孩":   ("hsiaoyu",   "-5%",  "+2Hz", "台灣女聲，自然像朋友聊天"),
+    "軟萌女聲":   ("hsiaoyu",   "-2%",  "+13Hz", "偏高偏軟，可愛路線"),
+    # 女聲 ── 大陸
+    "溫暖旁白女": ("xiaoxiao",  "-7%",  "-3Hz", "大陸女聲，敘事感強"),
+    "快嘴帶貨":   ("xiaoxiao",  "+20%", "+4Hz", "語速快，短影音賣貨風"),
+    "甜美撒嬌":   ("xiaoyi",    "-3%",  "+10Hz", "大陸女聲，甜"),
+    "童趣配音":   ("xiaoyi",    "+7%",  "+15Hz", "偏童聲，適合輕鬆內容"),
+    # 女聲 ── 方言／粵語
+    "東北大姊":   ("xiaobei",   "-4%",  "-2Hz", "東北話，爽朗"),
+    "陝西妹子":   ("xiaoni",    "+0%",  "+0Hz", "陝西話"),
+    "港女知性":   ("hiumaan",   "-5%",  "-2Hz", "粵語，成熟"),
+    "港女清亮":   ("hiugaai",   "+3%",  "+4Hz", "粵語，年輕"),
+    # 男聲
+    "沉穩大叔":   ("yunjhe",    "-8%",  "-6Hz", "台灣男聲，穩重"),
+    "陽光男孩":   ("yunxi",     "+6%",  "+5Hz", "大陸男聲，年輕有朝氣"),
+    "少年音":     ("yunxia",    "+3%",  "+8Hz", "偏少年"),
+    "電影旁白":   ("yunjian",   "-10%", "-8Hz", "渾厚低沉，預告片感"),
+    "新聞播報":   ("yunyang",   "+2%",  "+0Hz", "正式播報"),
+}
+
+
+def persona(name: str):
+    """人設名 → (完整聲音ID, 語速, 音高)；不是人設就回 None。"""
+    p = PERSONAS.get((name or "").strip())
+    if not p:
+        return None
+    code, rate, pitch, _ = p
+    return (CHINESE.get(code, FOREIGN.get(code, (None,)))[0], rate, pitch)
+
+
 ALIASES = {
     "溫和女": "hsiaochen", "女": "hsiaochen", "台女": "hsiaochen",
     "活潑女": "hsiaoyu", "沉穩男": "yunjhe", "男": "yunjhe", "台男": "yunjhe",
@@ -117,6 +155,20 @@ def search(keyword: str):
 
 
 def print_curated():
+    fem = [k for k, v in PERSONAS.items()
+           if CHINESE.get(v[0], ("", ""))[1].find("女") >= 0
+           or v[0] in ("hsiaochen", "hsiaoyu", "xiaoxiao", "xiaoyi",
+                       "xiaobei", "xiaoni", "hiumaan", "hiugaai")]
+    print(f"【人設 {len(PERSONAS)} 種】直接 --voice 人設名，語速音高都調好了")
+    print(f"  女聲 {len(fem)} 種：")
+    for k, (code, rate, pitch, desc) in PERSONAS.items():
+        if k in fem:
+            print(f"    {k:8s} {desc:24s} ({code} {rate} {pitch})")
+    print("  男聲：")
+    for k, (code, rate, pitch, desc) in PERSONAS.items():
+        if k not in fem:
+            print(f"    {k:8s} {desc:24s} ({code} {rate} {pitch})")
+    print()
     print("【中文系 14 種】--voice 用代號或中文別名")
     for code, (vid, desc) in CHINESE.items():
         alias = [a for a, c in ALIASES.items() if c == code]
